@@ -42,14 +42,19 @@ export interface IFileService {
 	onAfterOperation: Event<FileOperationEvent>;
 
 	/**
+	 * An event that is fired when a file system provider is added or removed
+	 */
+	onDidChangeFileSystemProviderRegistrations: Event<IFileSystemProviderRegistrationEvent>;
+
+	/**
 	 * Registeres a file system provider for a certain scheme.
 	 */
-	registerProvider?(scheme: string, provider: IFileSystemProvider): IDisposable;
+	registerProvider(scheme: string, provider: IFileSystemProvider): IDisposable;
 
 	/**
 	 * Checks if this file service can handle the given resource.
 	 */
-	canHandleResource?(resource: URI): boolean;
+	canHandleResource(resource: URI): boolean;
 
 	/**
 	 * Resolve the properties of a file identified by the resource.
@@ -150,42 +155,71 @@ export interface IFileService {
 	dispose(): void;
 }
 
-export enum FileType2 {
+export interface FileOverwriteOptions {
+	overwrite: boolean;
+}
+
+export interface FileWriteOptions {
+	overwrite: boolean;
+	create: boolean;
+}
+
+export enum FileType {
+	Unknown = 0,
 	File = 1,
 	Directory = 2,
-	SymbolicLink = 4,
+	SymbolicLink = 64
 }
 
 export interface IStat {
+	type: FileType;
 	mtime: number;
+	ctime: number;
 	size: number;
-	type: FileType2;
 }
 
-export interface IFileSystemProviderBase {
-	onDidChange: Event<IFileChange[]>;
+export interface IWatchOptions {
+	recursive: boolean;
+	excludes: string[];
+}
+
+export enum FileSystemProviderCapabilities {
+	FileReadWrite = 1 << 1,
+	FileOpenReadWriteClose = 1 << 2,
+	FileFolderCopy = 1 << 3,
+
+	PathCaseSensitive = 1 << 10
+}
+
+export interface IFileSystemProvider {
+
+	readonly capabilities: FileSystemProviderCapabilities;
+
+	onDidChangeFile: Event<IFileChange[]>;
+	watch(resource: URI, opts: IWatchOptions): IDisposable;
+
 	stat(resource: URI): TPromise<IStat>;
-	rename(from: URI, to: URI): TPromise<IStat>;
-	mkdir(resource: URI): TPromise<IStat>;
-	readdir(resource: URI): TPromise<[string, IStat][]>;
+	mkdir(resource: URI): TPromise<void>;
+	readdir(resource: URI): TPromise<[string, FileType][]>;
 	delete(resource: URI): TPromise<void>;
+
+	rename(from: URI, to: URI, opts: FileOverwriteOptions): TPromise<void>;
+	copy?(from: URI, to: URI, opts: FileOverwriteOptions): TPromise<void>;
+
+	readFile?(resource: URI): TPromise<Uint8Array>;
+	writeFile?(resource: URI, content: Uint8Array, opts: FileWriteOptions): TPromise<void>;
+
+	open?(resource: URI): TPromise<number>;
+	close?(fd: number): TPromise<void>;
+	read?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): TPromise<number>;
+	write?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): TPromise<number>;
 }
 
-export interface ISimpleReadWriteProvider {
-	_type: 'simple';
-	readFile(resource: URI): TPromise<Uint8Array>;
-	writeFile(resource: URI, content: Uint8Array): TPromise<void>;
+export interface IFileSystemProviderRegistrationEvent {
+	added: boolean;
+	scheme: string;
+	provider?: IFileSystemProvider;
 }
-
-export interface IReadWriteProvider {
-	_type: 'chunked';
-	open(resource: URI, options: { mode: string }): TPromise<number>;
-	close(fd: number): TPromise<void>;
-	read(fd: number, pos: number, data: Uint8Array, offset: number, length: number): TPromise<number>;
-	write(fd: number, pos: number, data: Uint8Array, offset: number, length: number): TPromise<number>;
-}
-
-export type IFileSystemProvider = (IFileSystemProviderBase & ISimpleReadWriteProvider) | (IFileSystemProviderBase & IReadWriteProvider);
 
 export enum FileOperation {
 	CREATE,
@@ -550,6 +584,11 @@ export interface IUpdateContentOptions {
 	 * The etag of the file. This can be used to prevent dirty writes.
 	 */
 	etag?: string;
+
+	/**
+	 * Run mkdirp before saving.
+	 */
+	mkdirp?: boolean;
 }
 
 export interface IResolveFileOptions {

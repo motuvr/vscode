@@ -24,8 +24,10 @@ import { setup as setupDataDebugTests } from './areas/debug/debug.test';
 import { setup as setupDataGitTests } from './areas/git/git.test';
 import { setup as setupDataStatusbarTests } from './areas/statusbar/statusbar.test';
 import { setup as setupDataExtensionTests } from './areas/extensions/extensions.test';
+import { setup as setupTerminalTests } from './areas/terminal/terminal.test';
 import { setup as setupDataMultirootTests } from './areas/multiroot/multiroot.test';
 import { setup as setupDataLocalizationTests } from './areas/workbench/localization.test';
+import { MultiLogger, Logger, ConsoleLogger, FileLogger } from './logger';
 
 const tmpDir = tmp.dirSync({ prefix: 't' }) as { name: string; removeCallback: Function; };
 const testDataPath = tmpDir.name;
@@ -38,7 +40,9 @@ const opts = minimist(args, {
 		'stable-build',
 		'wait-time',
 		'test-repo',
-		'keybindings'
+		'keybindings',
+		'screenshots',
+		'log'
 	],
 	boolean: [
 		'verbose'
@@ -54,6 +58,12 @@ const workspacePath = path.join(testDataPath, 'vscode-smoketest-express');
 const keybindingsPath = path.join(testDataPath, 'keybindings.json');
 const extensionsPath = path.join(testDataPath, 'extensions-dir');
 mkdirp.sync(extensionsPath);
+
+const screenshotsPath = opts.screenshots ? path.resolve(opts.screenshots) : null;
+
+if (screenshotsPath) {
+	mkdirp.sync(screenshotsPath);
+}
 
 function fail(errorMessage): void {
 	console.error(errorMessage);
@@ -229,6 +239,16 @@ async function setup(): Promise<void> {
 }
 
 function createApp(quality: Quality): Application {
+	const loggers: Logger[] = [];
+
+	if (opts.verbose) {
+		loggers.push(new ConsoleLogger());
+	}
+
+	if (opts.log) {
+		loggers.push(new FileLogger(opts.log));
+	}
+
 	return new Application({
 		quality,
 		codePath: opts.build,
@@ -237,7 +257,7 @@ function createApp(quality: Quality): Application {
 		extensionsPath,
 		workspaceFilePath,
 		waitTime: parseInt(opts['wait-time'] || '0') || 20,
-		verbose: opts.verbose
+		logger: new MultiLogger(loggers)
 	});
 }
 
@@ -248,6 +268,7 @@ before(async function () {
 });
 
 after(async function () {
+	await new Promise(c => setTimeout(c, 500)); // wait for shutdown
 	await new Promise((c, e) => rimraf(testDataPath, { maxBusyTries: 10 }, err => err ? e(err) : c()));
 });
 
@@ -255,7 +276,7 @@ describe('Data Migration', () => {
 	setupDataMigrationTests(userDataDir, createApp);
 });
 
-describe('Everything Else', () => {
+describe('Test', () => {
 	before(async function () {
 		const app = createApp(quality);
 		await app!.start();
@@ -265,6 +286,36 @@ describe('Everything Else', () => {
 	after(async function () {
 		await this.app.stop();
 	});
+
+	if (screenshotsPath) {
+		afterEach(async function () {
+			if (this.currentTest.state !== 'failed') {
+				return;
+			}
+
+			const app = this.app as Application;
+			const raw = await app.capturePage();
+			const buffer = new Buffer(raw, 'base64');
+
+			const name = this.currentTest.fullTitle().replace(/[^a-z0-9\-]/ig, '_');
+			const screenshotPath = path.join(screenshotsPath, `${name}.png`);
+
+			if (opts.log) {
+				app.logger.log('*** Screenshot recorded:', screenshotPath);
+			}
+
+			fs.writeFileSync(screenshotPath, buffer);
+		});
+	}
+
+	if (opts.log) {
+		beforeEach(async function () {
+			const app = this.app as Application;
+			const title = this.currentTest.fullTitle();
+
+			app.logger.log('*** Test start:', title);
+		});
+	}
 
 	setupDataLossTests();
 	setupDataExplorerTests();
@@ -276,6 +327,7 @@ describe('Everything Else', () => {
 	setupDataGitTests();
 	setupDataStatusbarTests();
 	setupDataExtensionTests();
+	setupTerminalTests();
 	setupDataMultirootTests();
 	setupDataLocalizationTests();
 });

@@ -350,6 +350,10 @@ export class RawDebugSession implements debug.ISession {
 		return this.send('pause', args);
 	}
 
+	public terminateThreads(args: DebugProtocol.TerminateThreadsArguments): TPromise<DebugProtocol.TerminateThreadsResponse> {
+		return this.send('terminateThreads', args);
+	}
+
 	public setVariable(args: DebugProtocol.SetVariableArguments): TPromise<DebugProtocol.SetVariableResponse> {
 		return this.send<DebugProtocol.SetVariableResponse>('setVariable', args);
 	}
@@ -465,6 +469,7 @@ export class RawDebugSession implements debug.ISession {
 		if (request.command === 'runInTerminal') {
 
 			this._debugger.runInTerminal(<DebugProtocol.RunInTerminalRequestArguments>request.arguments).then(_ => {
+				response.body = {};
 				this.debugAdapter.sendResponse(response);
 			}, err => {
 				response.success = false;

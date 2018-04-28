@@ -110,6 +110,10 @@ export interface IModelDecorationOptions {
 	 */
 	inlineClassName?: string;
 	/**
+	 * If there is an `inlineClassName` which affects letter spacing.
+	 */
+	inlineClassNameAffectsLetterSpacing?: boolean;
+	/**
 	 * If set, the decoration will be rendered before the text with this CSS class name.
 	 */
 	beforeContentClassName?: string;
@@ -396,8 +400,7 @@ export interface ITextModelCreationOptions {
 	trimAutoWhitespace: boolean;
 	defaultEOL: DefaultEndOfLine;
 	isForSimpleWidget: boolean;
-	largeFileSize: number;
-	largeFileLineCount: number;
+	largeFileOptimizations: boolean;
 }
 
 export interface ITextModelUpdateOptions {
@@ -440,6 +443,15 @@ export enum TrackedRangeStickiness {
 	NeverGrowsWhenTypingAtEdges = 1,
 	GrowsOnlyWhenTypingBefore = 2,
 	GrowsOnlyWhenTypingAfter = 3,
+}
+
+/**
+ * @internal
+ */
+export interface IActiveIndentGuideInfo {
+	startLineNumber: number;
+	endLineNumber: number;
+	indent: number;
 }
 
 /**
@@ -667,11 +679,11 @@ export interface ITextModel {
 	tokenizeViewport(startLineNumber: number, endLineNumber: number): void;
 
 	/**
-	 * Only basic mode supports allowed on this model because it is simply too large.
-	 * (tokenization is allowed and other basic supports)
+	 * This model is so large that it would not be a good idea to sync it over
+	 * to web workers or other places.
 	 * @internal
 	 */
-	isTooLargeForHavingARichMode(): boolean;
+	isTooLargeForSyncing(): boolean;
 
 	/**
 	 * The file is so large, that even tokenization is disabled.
@@ -852,6 +864,11 @@ export interface ITextModel {
 	 * @internal
 	 */
 	matchBracket(position: IPosition): [Range, Range];
+
+	/**
+	 * @internal
+	 */
+	getActiveIndentGuide(lineNumber: number, minLineNumber: number, maxLineNumber: number): IActiveIndentGuideInfo;
 
 	/**
 	 * @internal

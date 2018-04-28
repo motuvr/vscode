@@ -154,11 +154,17 @@ export class DebugService implements debug.IDebugService {
 		const session = <RawDebugSession>process.session;
 
 		if (broadcast.channel === EXTENSION_ATTACH_BROADCAST_CHANNEL) {
-			this.onSessionEnd(session);
+			const initialAttach = process.configuration.request === 'launch';
 
 			process.configuration.request = 'attach';
 			process.configuration.port = broadcast.payload.port;
-			this.doCreateProcess(process.session.root, process.configuration, process.getId());
+			// Do not end process on initial attach (since the request is still 'launch')
+			if (initialAttach) {
+				session.attach(process.configuration);
+			} else {
+				this.onSessionEnd(session);
+				this.doCreateProcess(process.session.root, process.configuration, process.getId());
+			}
 			return;
 		}
 
@@ -366,7 +372,7 @@ export class DebugService implements debug.IDebugService {
 			const waitFor = outputPromises.slice();
 			const source = event.body.source ? {
 				lineNumber: event.body.line,
-				column: event.body.column,
+				column: event.body.column ? event.body.column : 1,
 				source: process.getSource(event.body.source)
 			} : undefined;
 			if (event.body.variablesReference) {
@@ -599,11 +605,11 @@ export class DebugService implements debug.IDebugService {
 		return this.sendAllBreakpoints();
 	}
 
-	public addBreakpoints(uri: uri, rawBreakpoints: debug.IBreakpointData[]): TPromise<void> {
-		this.model.addBreakpoints(uri, rawBreakpoints);
+	public addBreakpoints(uri: uri, rawBreakpoints: debug.IBreakpointData[]): TPromise<debug.IBreakpoint[]> {
+		const breakpoints = this.model.addBreakpoints(uri, rawBreakpoints);
 		rawBreakpoints.forEach(rbp => aria.status(nls.localize('breakpointAdded', "Added breakpoint, line {0}, file {1}", rbp.lineNumber, uri.fsPath)));
 
-		return this.sendBreakpoints(uri);
+		return this.sendBreakpoints(uri).then(() => breakpoints);
 	}
 
 	public updateBreakpoints(uri: uri, data: { [id: string]: DebugProtocol.Breakpoint }, sendOnResourceSaved: boolean): void {
@@ -767,18 +773,17 @@ export class DebugService implements debug.IDebugService {
 				}
 
 				return (type ? TPromise.as(null) : this.configurationManager.guessDebugger().then(a => type = a && a.type)).then(() =>
-					(type ? this.extensionService.activateByEvent(`onDebugResolve:${type}`) : TPromise.as(null)).then(() =>
-						this.configurationManager.resolveConfigurationByProviders(launch && launch.workspace ? launch.workspace.uri : undefined, type, config).then(config => {
-							// a falsy config indicates an aborted launch
-							if (config && config.type) {
-								return this.createProcess(launch, config, sessionId);
-							}
+					this.configurationManager.resolveConfigurationByProviders(launch && launch.workspace ? launch.workspace.uri : undefined, type, config).then(config => {
+						// a falsy config indicates an aborted launch
+						if (config && config.type) {
+							return this.createProcess(launch, config, sessionId);
+						}
 
-							if (launch) {
-								return launch.openConfigFile(false, type).done(undefined, errors.onUnexpectedError);
-							}
-						})
-					)).then(() => undefined);
+						if (launch && type) {
+							return launch.openConfigFile(false, type).done(undefined, errors.onUnexpectedError);
+						}
+					})
+				).then(() => undefined);
 			})
 		))).then(() => wrapUpState(), err => {
 			wrapUpState();
@@ -786,9 +791,32 @@ export class DebugService implements debug.IDebugService {
 		});
 	}
 
+	private substituteVariables(launch: debug.ILaunch | undefined, config: debug.IConfig): TPromise<debug.IConfig> {
+		const dbg = this.configurationManager.getDebugger(config.type);
+		if (dbg) {
+			let folder: IWorkspaceFolder = undefined;
+			if (launch && launch.workspace) {
+				folder = launch.workspace;
+			} else {
+				const folders = this.contextService.getWorkspace().folders;
+				if (folders.length === 1) {
+					folder = folders[0];
+				}
+			}
+			return dbg.substituteVariables(folder, config).then(config => {
+				return config;
+			}, (err: Error) => {
+				this.showError(err.message);
+				return undefined;	// bail out
+			});
+		}
+		return TPromise.as(config);
+	}
+
 	private createProcess(launch: debug.ILaunch, config: debug.IConfig, sessionId: string): TPromise<void> {
 		return this.textFileService.saveAll().then(() =>
-			(launch ? launch.resolveConfiguration(config) : TPromise.as(config)).then(resolvedConfig => {
+			this.substituteVariables(launch, config).then(resolvedConfig => {
+
 				if (!resolvedConfig) {
 					// User canceled resolving of interactive variables, silently return
 					return undefined;
@@ -1149,7 +1177,9 @@ export class DebugService implements debug.IDebugService {
 			process.inactive = true;
 			this._onDidEndProcess.fire(process);
 			if (process.configuration.postDebugTask) {
-				this.runTask(process.getId(), process.session.root, process.configuration.postDebugTask);
+				this.runTask(process.getId(), process.session.root, process.configuration.postDebugTask).done(undefined, err =>
+					this.notificationService.error(err)
+				);
 			}
 		}
 
@@ -1205,7 +1235,7 @@ export class DebugService implements debug.IDebugService {
 				return TPromise.as(null);
 			}
 
-			const breakpointsToSend = this.model.getActivatedBreakpointsForResource(modelUri).filter(bp => bp.enabled);
+			const breakpointsToSend = this.model.getEnabledBreakpointsForResource(modelUri);
 
 			const source = process.getSourceForUri(modelUri);
 			let rawSource: DebugProtocol.Source;

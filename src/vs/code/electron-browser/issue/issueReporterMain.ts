@@ -107,7 +107,9 @@ export class IssueReporter extends Disposable {
 		});
 
 		ipcRenderer.send('issueSystemInfoRequest');
-		ipcRenderer.send('issuePerformanceInfoRequest');
+		if (configuration.data.issueType === IssueType.PerformanceIssue) {
+			ipcRenderer.send('issuePerformanceInfoRequest');
+		}
 		this.logService.trace('issueReporter: Sent data requests');
 
 		if (window.document.documentElement.lang !== 'en') {
@@ -294,7 +296,11 @@ export class IssueReporter extends Disposable {
 
 	private setEventHandlers(): void {
 		this.addEventListener('issue-type', 'change', (event: Event) => {
-			this.issueReporterModel.update({ issueType: parseInt((<HTMLInputElement>event.target).value) });
+			const issueType = parseInt((<HTMLInputElement>event.target).value);
+			this.issueReporterModel.update({ issueType: issueType });
+			if (issueType === IssueType.PerformanceIssue && !this.receivedPerformanceInfo) {
+				ipcRenderer.send('issuePerformanceInfoRequest');
+			}
 			this.updatePreviewButtonState();
 			this.render();
 		});
@@ -326,7 +332,7 @@ export class IssueReporter extends Disposable {
 
 		this.addEventListener('issue-source', 'change', (event: Event) => {
 			const fileOnExtension = JSON.parse((<HTMLInputElement>event.target).value);
-			this.issueReporterModel.update({ fileOnExtension: fileOnExtension, includeExtensions: !fileOnExtension, selectedExtension: null });
+			this.issueReporterModel.update({ fileOnExtension: fileOnExtension, includeExtensions: !fileOnExtension });
 			this.render();
 
 			const title = (<HTMLInputElement>document.getElementById('issue-title')).value;
@@ -343,8 +349,7 @@ export class IssueReporter extends Disposable {
 			this.issueReporterModel.update({ issueDescription });
 
 			// Only search for extension issues on title change
-			const fileOnExtension = this.issueReporterModel.getData().fileOnExtension;
-			if (!fileOnExtension) {
+			if (!this.issueReporterModel.fileOnExtension()) {
 				const title = (<HTMLInputElement>document.getElementById('issue-title')).value;
 				this.searchVSCodeIssues(title, issueDescription);
 			}
@@ -359,8 +364,7 @@ export class IssueReporter extends Disposable {
 				hide(lengthValidationMessage);
 			}
 
-			const fileOnExtension = this.issueReporterModel.getData().fileOnExtension;
-			if (fileOnExtension) {
+			if (this.issueReporterModel.fileOnExtension()) {
 				this.searchExtensionIssues(title);
 			} else {
 				const description = this.issueReporterModel.getData().issueDescription;
@@ -659,7 +663,6 @@ export class IssueReporter extends Disposable {
 			show(systemBlock);
 			show(processBlock);
 			show(workspaceBlock);
-			show(extensionsBlock);
 			show(problemSource);
 
 			if (fileOnExtension) {
@@ -674,6 +677,11 @@ export class IssueReporter extends Disposable {
 		} else if (issueType === IssueType.FeatureRequest) {
 			descriptionTitle.innerHTML = `${localize('description', "Description")} <span class="required-input">*</span>`;
 			descriptionSubtitle.innerHTML = localize('featureRequestDescription', "Please describe the feature you would like to see. We support GitHub-flavored Markdown. You will be able to edit your issue and add screenshots when we preview it on GitHub.");
+			show(problemSource);
+
+			if (fileOnExtension) {
+				show(extensionSelector);
+			}
 		} else if (issueType === IssueType.SettingsSearchIssue) {
 			show(blockContainer);
 			show(searchedExtensionsBlock);
@@ -701,7 +709,7 @@ export class IssueReporter extends Disposable {
 			isValid = this.validateInput(elementId) && isValid;
 		});
 
-		if (this.issueReporterModel.getData().fileOnExtension) {
+		if (this.issueReporterModel.fileOnExtension()) {
 			isValid = this.validateInput('extension-selector') && isValid;
 		}
 
@@ -751,7 +759,7 @@ export class IssueReporter extends Disposable {
 
 	private getIssueUrlWithTitle(issueTitle: string): string {
 		let repositoryUrl = product.reportIssueUrl;
-		if (this.issueReporterModel.getData().fileOnExtension) {
+		if (this.issueReporterModel.fileOnExtension()) {
 			const bugsUrl = this.getExtensionBugsUrl();
 			const extensionUrl = this.getExtensionRepositoryUrl();
 			// If given, try to match the extension's bug url
@@ -798,11 +806,13 @@ export class IssueReporter extends Disposable {
 
 		// Sort extensions by name
 		extensionOptions.sort((a, b) => {
-			if (a.name > b.name) {
+			const aName = a.name.toLowerCase();
+			const bName = b.name.toLowerCase();
+			if (aName > bName) {
 				return 1;
 			}
 
-			if (a.name < b.name) {
+			if (aName < bName) {
 				return -1;
 			}
 

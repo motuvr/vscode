@@ -17,7 +17,7 @@ import { IEditorGroup, toResource, IEditorIdentifier } from 'vs/workbench/common
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { getPathLabel } from 'vs/base/common/labels';
 import { Schemas } from 'vs/base/common/network';
-import { startsWith, startsWithIgnoreCase, equalsIgnoreCase } from 'vs/base/common/strings';
+import { startsWith, startsWithIgnoreCase, rtrim } from 'vs/base/common/strings';
 
 export class Model {
 
@@ -216,6 +216,9 @@ export class ExplorerItem {
 	 * Adds a child element to this folder.
 	 */
 	public addChild(child: ExplorerItem): void {
+		if (!this.children) {
+			this.isDirectory = true;
+		}
 
 		// Inherit some parent properties to child
 		child.parent = this;
@@ -277,7 +280,7 @@ export class ExplorerItem {
 	}
 
 	private getPlatformAwareName(name: string): string {
-		return isLinux ? name : name.toLowerCase();
+		return (isLinux || !name) ? name : name.toLowerCase();
 	}
 
 	/**
@@ -335,17 +338,14 @@ export class ExplorerItem {
 		if (resource && this.resource.scheme === resource.scheme && this.resource.authority === resource.authority &&
 			(isLinux ? startsWith(resource.path, this.resource.path) : startsWithIgnoreCase(resource.path, this.resource.path))
 		) {
-			return this.findByPath(resource.path, this.resource.path.length);
+			return this.findByPath(rtrim(resource.path, paths.sep), this.resource.path.length);
 		}
 
 		return null; //Unable to find
 	}
 
 	private findByPath(path: string, index: number): ExplorerItem {
-		if (this.resource.path === path) {
-			return this;
-		}
-		if (!isLinux && equalsIgnoreCase(this.resource.path, path)) {
+		if (paths.isEqual(rtrim(this.resource.path, paths.sep), path, !isLinux)) {
 			return this;
 		}
 
@@ -378,13 +378,14 @@ export class ExplorerItem {
 /* A helper that can be used to show a placeholder when creating a new stat */
 export class NewStatPlaceholder extends ExplorerItem {
 
+	public static NAME = '';
 	private static ID = 0;
 
 	private id: number;
 	private directoryPlaceholder: boolean;
 
 	constructor(isDirectory: boolean, root: ExplorerItem) {
-		super(URI.file(''), root, false, false, '');
+		super(URI.file(''), root, false, false, NewStatPlaceholder.NAME);
 
 		this.id = NewStatPlaceholder.ID++;
 		this.isDirectoryResolved = isDirectory;

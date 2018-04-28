@@ -5,7 +5,7 @@
 'use strict';
 
 import { INewScrollPosition } from 'vs/editor/common/editorCommon';
-import { EndOfLinePreference, IModelDecorationOptions } from 'vs/editor/common/model';
+import { EndOfLinePreference, IModelDecorationOptions, IActiveIndentGuideInfo } from 'vs/editor/common/model';
 import { IViewLineTokens } from 'vs/editor/common/core/lineTokens';
 import { Position, IPosition } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
@@ -75,7 +75,7 @@ export interface IViewLayout {
 	 * Reserve rendering space.
 	 * @return an identifier that can be later used to remove or change the whitespace.
 	 */
-	addWhitespace(afterLineNumber: number, ordinal: number, height: number): number;
+	addWhitespace(afterLineNumber: number, ordinal: number, height: number, minWidth: number): number;
 	/**
 	 * Change the properties of a whitespace.
 	 */
@@ -124,6 +124,7 @@ export interface IViewModel {
 
 	getDecorationsInViewport(visibleRange: Range): ViewModelDecoration[];
 	getViewLineRenderingData(visibleRange: Range, lineNumber: number): ViewLineRenderingData;
+	getViewLineData(lineNumber: number): ViewLineData;
 	getMinimapLinesRenderingData(startLineNumber: number, endLineNumber: number, needed: boolean[]): MinimapLinesRenderingData;
 	getCompletelyVisibleViewRange(): Range;
 	getCompletelyVisibleViewRangeAtScrollTop(scrollTop: number): Range;
@@ -132,6 +133,7 @@ export interface IViewModel {
 	getLineCount(): number;
 	getLineContent(lineNumber: number): string;
 	getLineLength(lineNumber: number): number;
+	getActiveIndentGuide(lineNumber: number, minLineNumber: number, maxLineNumber: number): IActiveIndentGuideInfo;
 	getLinesIndentGuides(startLineNumber: number, endLineNumber: number): number[];
 	getLineMinColumn(lineNumber: number): number;
 	getLineMaxColumn(lineNumber: number): number;
@@ -146,7 +148,7 @@ export interface IViewModel {
 
 	deduceModelPositionRelativeToViewPosition(viewAnchorPosition: Position, deltaOffset: number, lineFeedCnt: number): Position;
 	getEOL(): string;
-	getPlainTextToCopy(ranges: Range[], emptySelectionClipboard: boolean): string | string[];
+	getPlainTextToCopy(ranges: Range[], emptySelectionClipboard: boolean, forceCRLF: boolean): string | string[];
 	getHTMLToCopy(ranges: Range[], emptySelectionClipboard: boolean): string;
 }
 
@@ -270,7 +272,8 @@ export class ViewLineRenderingData {
 export const enum InlineDecorationType {
 	Regular = 0,
 	Before = 1,
-	After = 2
+	After = 2,
+	RegularAffectingLetterSpacing = 3
 }
 
 export class InlineDecoration {

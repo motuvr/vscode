@@ -15,6 +15,7 @@ import { IConfigurationService } from 'vs/platform/configuration/common/configur
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { IOutputService } from 'vs/workbench/parts/output/common/output';
 import { DebugAdapter } from 'vs/workbench/parts/debug/node/debugAdapter';
+import { IConfigurationResolverService } from 'vs/workbench/services/configurationResolver/common/configurationResolver';
 
 export class Debugger {
 
@@ -22,7 +23,8 @@ export class Debugger {
 
 	constructor(private configurationManager: IConfigurationManager, private debuggerContribution: IDebuggerContribution, public extensionDescription: IExtensionDescription,
 		@IConfigurationService private configurationService: IConfigurationService,
-		@ICommandService private commandService: ICommandService
+		@ICommandService private commandService: ICommandService,
+		@IConfigurationResolverService private configurationResolverService: IConfigurationResolverService,
 	) {
 		this._mergedExtensionDescriptions = [extensionDescription];
 	}
@@ -59,10 +61,34 @@ export class Debugger {
 		});
 	}
 
+	public substituteVariables(folder: IWorkspaceFolder, config: IConfig): TPromise<IConfig> {
+
+		// first resolve command variables (which might have a UI)
+		return this.configurationResolverService.executeCommandVariables(config, this.variables).then(commandValueMapping => {
+
+			if (!commandValueMapping) { // cancelled by user
+				return null;
+			}
+
+			// optionally substitute in EH
+			const inEh = this.configurationService.getValue<IDebugConfiguration>('debug').extensionHostDebugAdapter;
+
+			// now substitute all other variables
+			return (inEh ? this.configurationManager.substituteVariables(this.type, folder, config) : TPromise.as(config)).then(config => {
+				try {
+					return TPromise.as(DebugAdapter.substituteVariables(folder, config, this.configurationResolverService, commandValueMapping));
+				} catch (e) {
+					return TPromise.wrapError(e);
+				}
+			});
+		});
+	}
+
 	public runInTerminal(args: DebugProtocol.RunInTerminalRequestArguments): TPromise<void> {
 		const debugConfigs = this.configurationService.getValue<IDebugConfiguration>('debug');
 		const config = this.configurationService.getValue<ITerminalSettings>('terminal');
-		return this.configurationManager.runInTerminal(debugConfigs && debugConfigs.extensionHostDebugAdapter, args, config);
+		const type = debugConfigs.extensionHostDebugAdapter ? this.type : '*';
+		return this.configurationManager.runInTerminal(type, args, config);
 	}
 
 	public get aiKey(): string {

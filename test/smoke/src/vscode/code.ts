@@ -8,6 +8,7 @@ import * as cp from 'child_process';
 import * as os from 'os';
 import { tmpName } from 'tmp';
 import { IDriver, connect as connectDriver, IDisposable, IElement } from './driver';
+import { Logger } from '../logger';
 
 const repoPath = path.join(__dirname, '../../../..');
 
@@ -57,13 +58,13 @@ function getBuildOutPath(root: string): string {
 	}
 }
 
-async function connect(child: cp.ChildProcess, outPath: string, handlePath: string, verbose: boolean): Promise<Code> {
+async function connect(child: cp.ChildProcess, outPath: string, handlePath: string, logger: Logger): Promise<Code> {
 	let errCount = 0;
 
 	while (true) {
 		try {
 			const { client, driver } = await connectDriver(outPath, handlePath);
-			return new Code(child, client, driver, verbose);
+			return new Code(child, client, driver, logger);
 		} catch (err) {
 			if (++errCount > 50) {
 				child.kill();
@@ -85,7 +86,7 @@ export interface SpawnOptions {
 	workspacePath: string;
 	userDataDir: string;
 	extensionsPath: string;
-	verbose: boolean;
+	logger: Logger;
 	extraArgs?: string[];
 }
 
@@ -127,16 +128,46 @@ export async function spawn(options: SpawnOptions): Promise<Code> {
 
 	const spawnOptions: cp.SpawnOptions = {};
 
-	if (options.verbose) {
-		spawnOptions.stdio = 'inherit';
-	}
-
 	const child = cp.spawn(electronPath, args, spawnOptions);
 
 	instances.add(child);
 	child.once('exit', () => instances.delete(child));
 
-	return connect(child, outPath, handle, options.verbose);
+	return connect(child, outPath, handle, options.logger);
+}
+
+async function poll<T>(
+	fn: () => Promise<T>,
+	acceptFn: (result: T) => boolean,
+	timeoutMessage: string,
+	retryCount: number = 200,
+	retryInterval: number = 100 // millis
+): Promise<T> {
+	let trial = 1;
+
+	while (true) {
+		if (trial > retryCount) {
+			throw new Error(`Timeout: ${timeoutMessage} after ${(retryCount * retryInterval) / 1000} seconds.`);
+		}
+
+		let result;
+		try {
+			result = await fn();
+
+			if (acceptFn(result)) {
+				return result;
+			}
+		} catch (e) {
+			// console.warn(e);
+
+			if (/Method not implemented/.test(e.message)) {
+				throw e;
+			}
+		}
+
+		await new Promise(resolve => setTimeout(resolve, retryInterval));
+		trial++;
+	}
 }
 
 export class Code {
@@ -148,28 +179,29 @@ export class Code {
 		private process: cp.ChildProcess,
 		private client: IDisposable,
 		driver: IDriver,
-		verbose: boolean
+		readonly logger: Logger
 	) {
-		if (verbose) {
-			this.driver = new Proxy(driver, {
-				get(target, prop, receiver) {
-					if (typeof target[prop] !== 'function') {
-						return target[prop];
-					}
-
-					return function (...args) {
-						console.log('** ', prop, ...args.filter(a => typeof a === 'string'));
-						return target[prop].apply(this, args);
-					};
+		this.driver = new Proxy(driver, {
+			get(target, prop, receiver) {
+				if (typeof target[prop] !== 'function') {
+					return target[prop];
 				}
-			});
-		} else {
-			this.driver = driver;
-		}
+
+				return function (...args) {
+					logger.log(`${prop}`, ...args.filter(a => typeof a === 'string'));
+					return target[prop].apply(this, args);
+				};
+			}
+		});
+	}
+
+	async capturePage(): Promise<string> {
+		const windowId = await this.getActiveWindowId();
+		return await this.driver.capturePage(windowId);
 	}
 
 	async waitForWindowIds(fn: (windowIds: number[]) => boolean): Promise<void> {
-		await this.poll(() => this.driver.getWindowIds(), fn, `get window ids`);
+		await poll(() => this.driver.getWindowIds(), fn, `get window ids`);
 	}
 
 	async dispatchKeybinding(keybinding: string): Promise<void> {
@@ -177,86 +209,70 @@ export class Code {
 		await this.driver.dispatchKeybinding(windowId, keybinding);
 	}
 
+	async reload(): Promise<void> {
+		const windowId = await this.getActiveWindowId();
+		await this.driver.reloadWindow(windowId);
+	}
+
 	async waitForTextContent(selector: string, textContent?: string, accept?: (result: string) => boolean): Promise<string> {
 		const windowId = await this.getActiveWindowId();
 		accept = accept || (result => textContent !== void 0 ? textContent === result : !!result);
-		return await this.poll(() => this.driver.getElements(windowId, selector).then(els => els[0].textContent), s => accept!(typeof s === 'string' ? s : ''), `get text content '${selector}'`);
+		return await poll(() => this.driver.getElements(windowId, selector).then(els => els[0].textContent), s => accept!(typeof s === 'string' ? s : ''), `get text content '${selector}'`);
 	}
 
 	async waitAndClick(selector: string, xoffset?: number, yoffset?: number): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.click(windowId, selector, xoffset, yoffset), () => true, `click '${selector}'`);
+		await poll(() => this.driver.click(windowId, selector, xoffset, yoffset), () => true, `click '${selector}'`);
 	}
 
 	async waitAndDoubleClick(selector: string): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.doubleClick(windowId, selector), () => true, `double click '${selector}'`);
+		await poll(() => this.driver.doubleClick(windowId, selector), () => true, `double click '${selector}'`);
 	}
 
 	async waitAndMove(selector: string): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.move(windowId, selector), () => true, `move '${selector}'`);
+		await poll(() => this.driver.move(windowId, selector), () => true, `move '${selector}'`);
 	}
 
 	async waitForSetValue(selector: string, value: string): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.setValue(windowId, selector, value), () => true, `set value '${selector}'`);
+		await poll(() => this.driver.setValue(windowId, selector, value), () => true, `set value '${selector}'`);
+	}
+
+	async waitForPaste(selector: string, value: string): Promise<void> {
+		const windowId = await this.getActiveWindowId();
+		await poll(() => this.driver.paste(windowId, selector, value), () => true, `paste '${selector}'`);
 	}
 
 	async waitForElements(selector: string, recursive: boolean, accept: (result: IElement[]) => boolean = result => result.length > 0): Promise<IElement[]> {
 		const windowId = await this.getActiveWindowId();
-		return await this.poll(() => this.driver.getElements(windowId, selector, recursive), accept, `get elements '${selector}'`);
+		return await poll(() => this.driver.getElements(windowId, selector, recursive), accept, `get elements '${selector}'`);
 	}
 
-	async waitForElement(selector: string, accept: (result: IElement | undefined) => boolean = result => !!result): Promise<IElement> {
+	async waitForElement(selector: string, accept: (result: IElement | undefined) => boolean = result => !!result, retryCount: number = 200): Promise<IElement> {
 		const windowId = await this.getActiveWindowId();
-		return await this.poll<IElement>(() => this.driver.getElements(windowId, selector).then(els => els[0]), accept, `get element '${selector}'`);
+		return await poll<IElement>(() => this.driver.getElements(windowId, selector).then(els => els[0]), accept, `get element '${selector}'`, retryCount);
 	}
 
-	async waitForActiveElement(selector: string): Promise<void> {
+	async waitForActiveElement(selector: string, retryCount: number = 200): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.isActiveElement(windowId, selector), r => r, `is active element '${selector}'`);
+		await poll(() => this.driver.isActiveElement(windowId, selector), r => r, `is active element '${selector}'`, retryCount);
 	}
 
 	async waitForTitle(fn: (title: string) => boolean): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.getTitle(windowId), fn, `get title`);
+		await poll(() => this.driver.getTitle(windowId), fn, `get title`);
 	}
 
 	async waitForTypeInEditor(selector: string, text: string): Promise<void> {
 		const windowId = await this.getActiveWindowId();
-		await this.poll(() => this.driver.typeInEditor(windowId, selector, text), () => true, `type in editor '${selector}'`);
+		await poll(() => this.driver.typeInEditor(windowId, selector, text), () => true, `type in editor '${selector}'`);
 	}
 
-	private static PollRetryCount: number = 200;
-	private static PollInterval = 100; // millis
-
-	private async poll<T>(fn: () => Promise<T>, accept: (result: T) => boolean, timeoutMessage: string): Promise<T> {
-		let trial = 1;
-
-		while (true) {
-			if (trial > Code.PollRetryCount) {
-				throw new Error(`Timeout: ${timeoutMessage} after ${(Code.PollRetryCount * Code.PollInterval) / 1000} seconds.`);
-			}
-
-			let result;
-			try {
-				result = await fn();
-
-				if (accept(result)) {
-					return result;
-				}
-			} catch (e) {
-				// console.warn(e);
-
-				if (/Method not implemented/.test(e.message)) {
-					throw e;
-				}
-			}
-
-			await new Promise(resolve => setTimeout(resolve, Code.PollInterval));
-			trial++;
-		}
+	async waitForTerminalBuffer(selector: string, accept: (result: string[]) => boolean): Promise<void> {
+		const windowId = await this.getActiveWindowId();
+		await poll(() => this.driver.getTerminalBuffer(windowId, selector), accept, `get terminal buffer '${selector}'`);
 	}
 
 	private async getActiveWindowId(): Promise<number> {

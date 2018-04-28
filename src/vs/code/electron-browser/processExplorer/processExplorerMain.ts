@@ -12,7 +12,7 @@ import { repeat } from 'vs/base/common/strings';
 import { totalmem } from 'os';
 import product from 'vs/platform/node/product';
 import { localize } from 'vs/nls';
-import { ProcessExplorerData, ProcessExplorerStyles } from '../../../platform/issue/common/issue';
+import { ProcessExplorerStyles, ProcessExplorerData } from 'vs/platform/issue/common/issue';
 import * as browser from 'vs/base/browser/browser';
 import * as platform from 'vs/base/common/platform';
 
@@ -75,7 +75,7 @@ function updateProcessInfo(processList): void {
 			<th class="cpu">${localize('cpu', "CPU %")}</th>
 			<th class="memory">${localize('memory', "Memory (MB)")}</th>
 			<th class="pid">${localize('pid', "pid")}</th>
-			<th>${localize('name', "Name")}</th>
+			<th class="nameLabel">${localize('name', "Name")}</th>
 		</tr>`;
 
 	processList.forEach(p => {
@@ -146,7 +146,7 @@ function showContextMenu(e) {
 		})
 		);
 
-		menu.popup({ window: remote.getCurrentWindow() });
+		menu.popup(remote.getCurrentWindow());
 	}
 }
 
@@ -161,7 +161,7 @@ export function startup(data: ProcessExplorerData): void {
 		const tableRows = document.getElementsByTagName('tr');
 		for (let i = 0; i < tableRows.length; i++) {
 			const tableRow = tableRows[i];
-			tableRow.addEventListener('click', (e) => {
+			tableRow.addEventListener('contextmenu', (e) => {
 				showContextMenu(e);
 			});
 		}

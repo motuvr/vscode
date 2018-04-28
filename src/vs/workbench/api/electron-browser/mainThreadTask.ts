@@ -19,17 +19,17 @@ import {
 	ContributedTask, ExtensionTaskSourceTransfer, TaskIdentifier, TaskExecution, Task, TaskEvent, TaskEventKind,
 	PresentationOptions, CommandOptions, CommandConfiguration, RuntimeType, CustomTask, TaskScope, TaskSource, TaskSourceKind, ExtensionTaskSource, RevealKind, PanelKind
 } from 'vs/workbench/parts/tasks/common/tasks';
-import { ITaskService } from 'vs/workbench/parts/tasks/common/taskService';
+import { ITaskService, TaskFilter } from 'vs/workbench/parts/tasks/common/taskService';
 
 
 import { extHostNamedCustomer } from 'vs/workbench/api/electron-browser/extHostCustomers';
 import { ExtHostContext, MainThreadTaskShape, ExtHostTaskShape, MainContext, IExtHostContext } from 'vs/workbench/api/node/extHost.protocol';
 import {
 	TaskDefinitionDTO, TaskExecutionDTO, ProcessExecutionOptionsDTO, TaskPresentationOptionsDTO,
-	ProcessExecutionDTO, ShellExecutionDTO, ShellExecutionOptionsDTO, TaskDTO, TaskSourceDTO, TaskHandleDTO
+	ProcessExecutionDTO, ShellExecutionDTO, ShellExecutionOptionsDTO, TaskDTO, TaskSourceDTO, TaskHandleDTO, TaskFilterDTO
 } from 'vs/workbench/api/shared/tasks';
 
-export { TaskDTO, TaskHandleDTO, TaskExecutionDTO };
+export { TaskDTO, TaskHandleDTO, TaskExecutionDTO, TaskFilterDTO };
 
 namespace TaskExecutionDTO {
 	export function from(value: TaskExecution): TaskExecutionDTO {
@@ -285,9 +285,6 @@ namespace TaskDTO {
 				}
 			}
 		}
-		if (!result.execution) {
-			return undefined;
-		}
 		return result;
 	}
 
@@ -327,6 +324,15 @@ namespace TaskDTO {
 			hasDefinedMatchers: task.hasDefinedMatchers
 		};
 		return result;
+	}
+}
+
+namespace TaskFilterDTO {
+	export function from(value: TaskFilter): TaskFilterDTO {
+		return value;
+	}
+	export function to(value: TaskFilterDTO): TaskFilter {
+		return value;
 	}
 }
 
@@ -387,8 +393,8 @@ export class MainThreadTask implements MainThreadTaskShape {
 		return TPromise.wrap<void>(undefined);
 	}
 
-	public $executeTaskProvider(): TPromise<TaskDTO[]> {
-		return this._taskService.tasks().then((tasks) => {
+	public $fetchTasks(filter?: TaskFilterDTO): TPromise<TaskDTO[]> {
+		return this._taskService.tasks(TaskFilterDTO.to(filter)).then((tasks) => {
 			let result: TaskDTO[] = [];
 			for (let task of tasks) {
 				let item = TaskDTO.from(task);
